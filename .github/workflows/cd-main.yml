@@ -43,6 +43,12 @@ jobs:
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v1
 
+    - name: Add GCS remote (if missing)
+      run: |
+        if ! dvc remote list | grep -q gcsremote; then
+          dvc remote add -d gcsremote gs://${{ secrets.GCS_BUCKET }}/dvcstore
+        fi
+
     - name: Pull model from DVC
       run: |
         dvc remote modify gcsremote --local url gs://${{ secrets.GCS_BUCKET }}/dvcstore
