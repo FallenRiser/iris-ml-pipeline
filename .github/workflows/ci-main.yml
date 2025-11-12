@@ -1,0 +1,116 @@
+# .github/workflows/ci-main.yml
+name: CI - Main Branch (PR)
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    name: Run Tests for Main PR
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GKE_SA_KEY }}
+        
+    - name: Pull model and data from DVC
+      run: |
+        dvc remote modify gcsremote --local url gs://${{ secrets.GCS_BUCKET }}/dvcstore
+        dvc pull
+        
+    - name: Run pytest with coverage
+      run: |
+        pytest tests/ -v --tb=short --color=yes > test_results.txt 2>&1
+        EXIT_CODE=$?
+        cat test_results.txt
+        exit $EXIT_CODE
+    
+    - name: Generate model metrics
+      if: always()
+      run: |
+        python -c "
+import joblib
+import pandas as pd
+from sklearn.metrics import accuracy_score, classification_report
+import json
+
+model = joblib.load('model_iris_bq.joblib')
+test_data = pd.DataFrame({
+    'sepal_length': [5.1, 4.9, 6.7, 5.8, 6.3, 5.0, 4.6, 7.0],
+    'sepal_width': [3.5, 3.0, 3.1, 2.7, 2.8, 3.4, 3.2, 3.2],
+    'petal_length': [1.4, 1.4, 4.7, 5.1, 5.1, 1.5, 1.4, 4.7],
+    'petal_width': [0.2, 0.2, 1.5, 1.9, 1.5, 0.2, 0.2, 1.4]
+})
+y_true = [0, 0, 1, 2, 2, 0, 0, 1]
+y_pred = model.predict(test_data)
+acc = accuracy_score(y_true, y_pred)
+
+metrics = {
+    'accuracy': float(acc),
+    'n_test_samples': len(y_true),
+    'correct_predictions': int((y_pred == y_true).sum()),
+    'incorrect_predictions': int((y_pred != y_true).sum())
+}
+
+with open('metrics.json', 'w') as f:
+    json.dump(metrics, f, indent=2)
+
+print(f'Test Accuracy: {acc:.2%}')
+print(f'Correct: {metrics[\"correct_predictions\"]}/{metrics[\"n_test_samples\"]}')
+        " > metrics_output.txt 2>&1
+        cat metrics_output.txt
+        
+    - name: Setup CML
+      if: always()
+      uses: iterative/setup-cml@v2
+      
+    - name: Create CML Report
+      if: always()
+      env:
+        REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "## 📊 Main Branch - PR Test Report" > report.md
+        echo "" >> report.md
+        echo "**PR:** #${{ github.event.pull_request.number }}" >> report.md
+        echo "**Branch:** \`${{ github.head_ref }}\` → \`main\`" >> report.md
+        echo "**Commit:** \`${{ github.sha }}\`" >> report.md
+        echo "" >> report.md
+        echo "### 🎯 Model Performance Metrics" >> report.md
+        echo "\`\`\`json" >> report.md
+        cat metrics.json >> report.md
+        echo "\`\`\`" >> report.md
+        echo "" >> report.md
+        echo "### 🧪 Full Test Results" >> report.md
+        echo "\`\`\`" >> report.md
+        cat test_results.txt >> report.md
+        echo "\`\`\`" >> report.md
+        echo "" >> report.md
+        echo "### ✅ Status" >> report.md
+        if grep -q "passed" test_results.txt && [ -f metrics.json ]; then
+          echo "All validation checks passed! Ready to merge. ✨" >> report.md
+        else
+          echo "⚠️ Some tests failed or metrics not generated - review required before merge" >> report.md
+        fi
+        cml comment create report.md

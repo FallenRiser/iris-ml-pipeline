@@ -1,0 +1,17 @@
+# k8s/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: iris-api-service
+  labels:
+    app: iris-api
+spec:
+  type: LoadBalancer
+  selector:
+    app: iris-api
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8000
+    name: http
+  sessionAffinity: None
