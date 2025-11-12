@@ -1,0 +1,83 @@
+# .github/workflows/ci-dev.yml
+name: CI - Dev Branch
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    name: Run Tests on Dev
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GKE_SA_KEY }}
+
+    - name: Add GCS remote (if missing)
+      run: |
+        if ! dvc remote list | grep -q gcsremote; then
+          dvc remote add -d gcsremote gs://${{ secrets.GCS_BUCKET }}/dvcstore
+        fi
+        
+    - name: Pull model and data from DVC
+      run: |
+        dvc remote modify gcsremote --local url gs://${{ secrets.GCS_BUCKET }}/dvcstore
+        dvc pull
+        
+    - name: Run pytest
+      run: |
+        pytest tests/ -v --tb=short --color=yes > test_results.txt 2>&1
+        EXIT_CODE=$?
+        cat test_results.txt
+        exit $EXIT_CODE
+        
+    - name: Setup CML
+      if: always()
+      uses: iterative/setup-cml@v2
+      
+    - name: Create CML Report
+      if: always()
+      env:
+        REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "## 🧪 Dev Branch - Test Results" > report.md
+        echo "" >> report.md
+        echo "**Branch:** \`dev\`" >> report.md
+        echo "**Commit:** \`${{ github.sha }}\`" >> report.md
+        echo "" >> report.md
+        echo "### Test Summary" >> report.md
+        echo "\`\`\`" >> report.md
+        cat test_results.txt >> report.md
+        echo "\`\`\`" >> report.md
+        echo "" >> report.md
+        if grep -q "passed" test_results.txt; then
+          echo "✅ All tests passed on dev branch!" >> report.md
+        else
+          echo "❌ Some tests failed - please review above" >> report.md
+        fi
+        cml comment create report.md
