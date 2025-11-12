@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+
+# DVC - Don't commit actual data files
+/model_iris_bq.joblib
+/iris_data_adapted_for_feast.csv
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Testing
+.pytest_cache/
+test_results.txt
+htmlcov/
+.coverage
+
+# Kubernetes
+*.kubeconfig
