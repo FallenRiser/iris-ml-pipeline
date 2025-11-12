@@ -37,6 +37,12 @@ jobs:
       uses: google-github-actions/auth@v1
       with:
         credentials_json: ${{ secrets.GKE_SA_KEY }}
+
+    - name: Add GCS remote (if missing)
+      run: |
+        if ! dvc remote list | grep -q gcsremote; then
+          dvc remote add -d gcsremote gs://${{ secrets.GCS_BUCKET }}/dvcstore
+        fi
         
     - name: Pull model and data from DVC
       run: |
