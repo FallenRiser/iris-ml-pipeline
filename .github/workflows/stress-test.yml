@@ -1,0 +1,159 @@
+# .github/workflows/stress-test.yml
+name: Stress Test - Post Deployment
+
+on:
+  workflow_dispatch:  # Manual trigger
+  workflow_run:
+    workflows: ["CD - Build, Push & Deploy to GKE"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  GKE_CLUSTER: ${{ secrets.GKE_CLUSTER_NAME }}
+  GKE_ZONE: ${{ secrets.GKE_ZONE }}
+
+jobs:
+  stress-test:
+    name: Run Stress Test with wrk
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GKE_SA_KEY }}
+    
+    - name: Get GKE credentials
+      uses: google-github-actions/get-gke-credentials@v1
+      with:
+        cluster_name: ${{ env.GKE_CLUSTER }}
+        location: ${{ env.GKE_ZONE }}
+    
+    - name: Install wrk
+      run: |
+        sudo apt-get update
+        sudo apt-get install build-essential libssl-dev git -y
+        git clone https://github.com/wg/wrk.git /tmp/wrk
+        cd /tmp/wrk
+        make
+        sudo cp wrk /usr/local/bin/
+        wrk --version
+    
+    - name: Get LoadBalancer IP
+      id: get-ip
+      run: |
+        echo "⏳ Waiting for LoadBalancer IP..."
+        for i in {1..30}; do
+          EXTERNAL_IP=$(kubectl get service iris-api-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+          if [ -n "$EXTERNAL_IP" ]; then
+            echo "✅ LoadBalancer IP: $EXTERNAL_IP"
+            echo "external_ip=$EXTERNAL_IP" >> $GITHUB_OUTPUT
+            break
+          fi
+          sleep 10
+        done
+    
+    - name: Verify API is healthy
+      run: |
+        EXTERNAL_IP=${{ steps.get-ip.outputs.external_ip }}
+        echo "🔍 Checking API health..."
+        curl -f http://$EXTERNAL_IP/health || exit 1
+        echo "✅ API is healthy"
+    
+    - name: Record initial state
+      run: |
+        echo "📊 Initial cluster state:" > stress_test_report.txt
+        kubectl get pods -l app=iris-api >> stress_test_report.txt
+        echo "" >> stress_test_report.txt
+        kubectl get hpa iris-api-hpa >> stress_test_report.txt
+        echo "" >> stress_test_report.txt
+        cat stress_test_report.txt
+    
+    - name: Create wrk payload script
+      run: |
+        cat > wrk-payload.lua << 'EOF'
+        wrk.method = "POST"
+        wrk.headers["Content-Type"] = "application/json"
+        wrk.body = '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+        EOF
+    
+    - name: Run stress test - 1000 requests
+      run: |
+        EXTERNAL_IP=${{ steps.get-ip.outputs.external_ip }}
+        echo "" >> stress_test_report.txt
+        echo "## 🔥 Stress Test 1: 1000 requests (c=100, t=12, d=30s)" >> stress_test_report.txt
+        wrk -t12 -c100 -d30s --latency -s wrk-payload.lua http://$EXTERNAL_IP/predict 2>&1 | tee -a stress_test_report.txt
+        
+        echo "" >> stress_test_report.txt
+        echo "📊 Cluster state after 1000 requests:" >> stress_test_report.txt
+        sleep 10
+        kubectl get pods -l app=iris-api >> stress_test_report.txt
+        kubectl get hpa iris-api-hpa >> stress_test_report.txt
+    
+    - name: Wait for cooldown
+      run: |
+        echo "⏳ Waiting 60s for metrics stabilization..."
+        sleep 60
+    
+    - name: Run stress test - 2000 requests
+      run: |
+        EXTERNAL_IP=${{ steps.get-ip.outputs.external_ip }}
+        echo "" >> stress_test_report.txt
+        echo "## 🔥 Stress Test 2: 2000 requests (c=400, t=12, d=60s)" >> stress_test_report.txt
+        wrk -t12 -c400 -d60s --latency -s wrk-payload.lua http://$EXTERNAL_IP/predict 2>&1 | tee -a stress_test_report.txt
+        
+        echo "" >> stress_test_report.txt
+        echo "📊 Cluster state after 2000 requests:" >> stress_test_report.txt
+        sleep 10
+        kubectl get pods -l app=iris-api >> stress_test_report.txt
+        kubectl get hpa iris-api-hpa >> stress_test_report.txt
+    
+    - name: Collect final metrics
+      run: |
+        echo "" >> stress_test_report.txt
+        echo "## 📈 Final Metrics" >> stress_test_report.txt
+        echo "### Pod Details:" >> stress_test_report.txt
+        kubectl describe pods -l app=iris-api | grep -A 5 "Conditions:" >> stress_test_report.txt
+        echo "" >> stress_test_report.txt
+        echo "### HPA Details:" >> stress_test_report.txt
+        kubectl describe hpa iris-api-hpa >> stress_test_report.txt
+    
+    - name: Setup CML
+      uses: iterative/setup-cml@v2
+    
+    - name: Create stress test report
+      env:
+        REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        {
+          echo "## 🚀 Stress Test Report"
+          echo ""
+          echo "**Test Run:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "**Commit:** \`${{ github.sha }}\`"
+          echo ""
+          echo "### Summary"
+          echo "- ✅ Test 1: 1000 requests (100 concurrent)"
+          echo "- ✅ Test 2: 2000 requests (400 concurrent)"
+          echo "- ✅ HPA Min: 1 pod, Max: 3 pods"
+          echo ""
+          echo "### Detailed Results"
+          echo "\`\`\`"
+          cat stress_test_report.txt
+          echo "\`\`\`"
+        } > cml_report.md
+        
+        cml comment create cml_report.md
+    
+    - name: Upload stress test report
+      uses: actions/upload-artifact@v3
+      with:
+        name: stress-test-report
+        path: stress_test_report.txt
