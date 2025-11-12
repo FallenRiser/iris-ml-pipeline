@@ -1,0 +1,5 @@
+outs:
+- md5: fd614f7109511dc412ad66ed061c2c08
+  size: 126569
+  hash: md5
+  path: model_iris_bq.joblib
