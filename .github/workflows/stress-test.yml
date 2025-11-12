@@ -40,7 +40,6 @@ jobs:
     - name: Install wrk
       run: |
         sudo apt-get update
-        sudo apt-get install build-essential libssl-dev git -y
         git clone https://github.com/wg/wrk.git /tmp/wrk
         cd /tmp/wrk
         make
