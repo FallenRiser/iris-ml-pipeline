@@ -123,35 +123,3 @@ jobs:
         echo "" >> stress_test_report.txt
         echo "### HPA Details:" >> stress_test_report.txt
         kubectl describe hpa iris-api-hpa >> stress_test_report.txt
-    
-    - name: Setup CML
-      uses: iterative/setup-cml@v2
-    
-    - name: Create stress test report
-      env:
-        REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        {
-          echo "## 🚀 Stress Test Report"
-          echo ""
-          echo "**Test Run:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "**Commit:** \`${{ github.sha }}\`"
-          echo ""
-          echo "### Summary"
-          echo "- ✅ Test 1: 1000 requests (100 concurrent)"
-          echo "- ✅ Test 2: 2000 requests (400 concurrent)"
-          echo "- ✅ HPA Min: 1 pod, Max: 3 pods"
-          echo ""
-          echo "### Detailed Results"
-          echo "\`\`\`"
-          cat stress_test_report.txt
-          echo "\`\`\`"
-        } > cml_report.md
-        
-        cml comment create cml_report.md
-    
-    - name: Upload stress test report
-      uses: actions/upload-artifact@v4
-      with:
-        name: stress-test-report
-        path: stress_test_report.txt
