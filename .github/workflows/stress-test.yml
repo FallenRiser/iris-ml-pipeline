@@ -44,7 +44,6 @@ jobs:
         cd /tmp/wrk
         make
         sudo cp wrk /usr/local/bin/
-        wrk --version
     
     - name: Get LoadBalancer IP
       id: get-ip
